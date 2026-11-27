@@ -1,6 +1,14 @@
 # IAM Toolkit
 
-Tools for running license access requests for a SaaS app whose seats are granted through an Entra ID / Active Directory security group. Built from real day-to-day provisioning work and scrubbed of anything organization-specific.
+Access request tracker and quick reference for group-based SaaS licensing: role-based approvals, training gates, periodic access reviews and an audit trail.
+
+## Use case
+
+An organization pays for a limited number of seats in a SaaS app, and access is granted through an Entra ID or Active Directory security group. Requests come in from different kinds of users, such as employees, contractors and vendors, and each needs a different approver. Some users must finish training before they get access. Seats also have to be reclaimed from inactive users on a regular schedule.
+
+Without a system, that work lives in email threads and memory. Approvals get missed, people are granted access without the right sign-off, and when a removed user asks to come back, nobody can say why they were removed or how often.
+
+The toolkit gives the access coordinator one workbook that tracks every request from intake to close. For each request it names the right approver, shows the next step and keeps a removal history. A matching one-page reference lets anyone covering the queue follow the same rules. Roles, approvers and email templates are set in one config file, so the tools fit any organization's policy without changing the code.
 
 ## What's here
 
