@@ -1,38 +1,25 @@
 """
-Access Request Tracker builder (generic, scrubbed).
+Access Request Tracker builder.
 Builds an Excel workbook that tracks license access requests for a SaaS app
 gated by an Entra ID / AD security group, with a removal log and a console
 for checking new removal lists.
 
 Usage:  python build_tracker.py "Access Request Tracker.xlsx"
 Then recalculate formulas (open in Excel, or run LibreOffice headless recalc).
-Edit the CONFIG block for your organization.
+Roles, approvers, rules and templates come from access_config.py.
 """
-import sys, datetime as dt
+import sys, re, datetime as dt
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
+import access_config as C
 
-# ================= CONFIG =================
 OUT = sys.argv[1] if len(sys.argv) > 1 else 'Access Request Tracker.xlsx'
 N = 300                                   # tracker rows
-APP = 'ExampleApp'                        # app name used in labels and templates
-APPROVER_CONTRACT = '[Contract attorney approver]'
-APPROVER_VENDOR = '[Vendor/affiliate approver]'
-VENDOR_ROLE = 'Vendor/affiliate'          # e.g. an outsourced staffing group
-APPROVER_DEFAULT = '[Default approver]'   # used when a team has no liaison
-TRAINING_LOCATION = '[LMS name]'
-TRAIN_URL_1 = '[Training recording 1 URL]'
-TRAIN_URL_2 = '[Training recording 2 URL]'
-TRAIN_NAME_1 = 'Litigation Training'
-TRAIN_NAME_2 = 'Transactional Training'
-APP_URL = 'https://app.example.com/'
-GUIDE_LINE = 'Please see our [guide name] for more information, including upcoming and previously recorded training sessions: [guide link].'
-INACTIVITY_RULE = 'access > 20 days and no activity in last 20 days (internal only)'
-# ==========================================
+PRE, EMP, CON, VEN = C.ROLE_PREAPPROVED, C.ROLE_EMPLOYEE, C.ROLE_CONTRACTOR, C.ROLE_VENDOR
 
 F = 'Arial'
 hdr_font = Font(name=F, bold=True, color='FFFFFF', size=10)
@@ -60,14 +47,14 @@ cols = [
     ('Requester', 22, 'in'),
     ('Email', 30, 'in'),
     ('Role', 17, 'in'),
-    ('Team (staff only)', 26, 'in'),
+    (f'Team ({EMP} only)', 26, 'in'),
     ('Request type', 12, 'in'),
     ('Last removed', 12, 'calc'),
     ('Training certificate received (new only)', 14, 'in'),
     ('Expects regular use (restore only)', 14, 'in'),
     ('Approver', 22, 'calc'),
     ('Approval', 12, 'in'),
-    ('Sent to User Admin', 12, 'in'),
+    (f'Sent to {C.IDENTITY_ADMIN}', 12, 'in'),
     ('Access confirmed', 12, 'in'),
     ('Next action', 48, 'calc'),
     ('Status', 14, 'calc'),
@@ -87,21 +74,25 @@ ws.freeze_panes = 'D2'
 def next_action(r):
     E, G, I, J, K, L, M, N_ = (f'{x}{r}' for x in 'EGIJKLMN')
     approve_path = (f'IF(L{r}="Declined","Tell requester it was declined; close",'
-                    f'IF(OR(E{r}="Attorney",L{r}="Approved"),'
+                    f'IF(OR(E{r}="{PRE}",L{r}="Approved"),'
                     f'IF(M{r}="","{{UA}}","{{AFTER}}"),'
                     f'IF(L{r}="Pending","Waiting on approver ("&K{r}&")",'
                     f'"{{ASK}}")))')
-    new_path = approve_path.replace('{UA}', 'Ask User Admin to add to {APP} group') \
+    new_path = approve_path.replace('{UA}', f'Ask {C.IDENTITY_ADMIN} to add to {C.ACCESS_GROUP}') \
         .replace('{AFTER}', 'Once added: send Template C, then enter Access confirmed date') \
         .replace('"{ASK}"', f'"Send Template A to requester + Template B to "&K{r}&"; set Approval to Pending"')
-    res_path = approve_path.replace('{UA}', 'Ask User Admin to restore to {APP} group') \
+    res_path = approve_path.replace('{UA}', f'Ask {C.IDENTITY_ADMIN} to restore to {C.ACCESS_GROUP}') \
         .replace('{AFTER}', 'Once restored: send Template E, then enter Access confirmed date') \
         .replace('"{ASK}"', f'"Send Template B to "&K{r}&" for approval; set Approval to Pending"')
-    role_chk = f'IF(AND(E{r}="",L{r}<>"Approved"),"Confirm requester\'s role (attorney or not)",'
+    role_chk = f'IF(AND(E{r}="",L{r}<>"Approved"),"Set the requester\'s Role",'
+    if C.TRAINING_REQUIRED_FOR_NEW:
+        new_branch = (f'IF(I{r}<>"Yes","Send Template F (training links); mark Training certificate received when it arrives",'
+                      f'{role_chk}{new_path})),')
+    else:
+        new_branch = f'{role_chk}{new_path}),'
     return (f'=IF(C{r}="","",IF(N{r}<>"","Done",IF(G{r}="","Set Request type (New or Restore)",'
             f'IF(G{r}="New",'
-            f'IF(I{r}<>"Yes","Send Template F (training links); mark Training certificate received when it arrives",'
-            f'{role_chk}{new_path})),'
+            + new_branch +
             f'IF(J{r}="","Send Template D; record their answer in Expects regular use",'
             f'IF(J{r}="No","No current need: close; they can reach out later",'
             f'{role_chk}{res_path})))))))')
@@ -114,10 +105,10 @@ def status(r):
 for r in range(2, N + 2):
     ws[f'H{r}'] = f'=IF(D{r}="","",IF(COUNTIF(\'Removal Log\'!$A:$A,D{r})=0,"Never",_xlfn.MAXIFS(\'Removal Log\'!$B:$B,\'Removal Log\'!$A:$A,D{r})))'
     ws[f'R{r}'] = f'=IF(D{r}="","",COUNTIF(\'Removal Log\'!$A:$A,D{r}))'
-    ws[f'K{r}'] = (f'=IF(E{r}="","",IF(E{r}="Attorney","None needed",'
-                   f'IF(E{r}="Contract attorney","{APPROVER_CONTRACT}",'
-                   f'IF(E{r}="{VENDOR_ROLE}","{APPROVER_VENDOR}",'
-                   f'IFERROR(INDEX(Liaisons!$C:$C,MATCH(F{r},Liaisons!$A:$A,0)),"{APPROVER_DEFAULT} (no liaison)")))))')
+    ws[f'K{r}'] = (f'=IF(E{r}="","",IF(E{r}="{PRE}","None needed",'
+                   f'IF(E{r}="{CON}","{C.APPROVER_CONTRACTOR}",'
+                   f'IF(E{r}="{VEN}","{C.APPROVER_VENDOR}",'
+                   f'IFERROR(INDEX(Approvers!$C:$C,MATCH(F{r},Approvers!$A:$A,0)),"{C.APPROVER_DEFAULT} (team not listed)")))))')
     ws[f'O{r}'] = next_action(r)
     ws[f'P{r}'] = status(r)
     for ci, (_, _, k) in enumerate(cols, 1):
@@ -134,7 +125,7 @@ for r in range(2, N + 2):
 
 # one fictional example row showing the expected format
 ws['A2'] = '100001'; ws['B2'] = dt.date(2026, 1, 5); ws['C2'] = 'Jane Example (sample row - delete)'
-ws['D2'] = 'jane.example@example.com'; ws['E2'] = 'Attorney'; ws['G2'] = 'New'
+ws['D2'] = 'jane.example@example.com'; ws['E2'] = PRE; ws['G2'] = 'New'
 ws['Q2'] = 'Sample row. Delete before use.'
 
 # dropdowns
@@ -144,8 +135,8 @@ def dv(formula, rng, allow_other=False):
         v.showErrorMessage = False
     ws.add_data_validation(v)
     v.add(rng)
-dv(f'"Attorney,Contract attorney,Staff,{VENDOR_ROLE}"', f'E2:E{N+1}')
-dv(f"=Liaisons!$A$2:$A$60", f'F2:F{N+1}', allow_other=True)
+dv('"' + ",".join(C.ROLES) + '"', f'E2:E{N+1}')
+dv(f"=Approvers!$A$2:$A$60", f'F2:F{N+1}', allow_other=True)
 dv('"New,Restore"', f'G2:G{N+1}')
 dv('"Yes,No"', f'I2:I{N+1}')
 dv('"Yes,No"', f'J2:J{N+1}')
@@ -161,7 +152,7 @@ ws.auto_filter.ref = f'A1:R{N+1}'
 
 ws['H1'].comment = Comment('Most recent date this email appears in the Removal Log tab, or Never.', 'Admin')
 ws['R1'].comment = Comment('How many times this email appears in the Removal Log tab.', 'Admin')
-ws['K1'].comment = Comment('From Role and Team. Attorneys need no approval. Staff: team liaison from the Liaisons tab, or the default approver if the team has none. Contract attorney and vendor/affiliate: their configured approvers. Same approvers for new and restore.', 'Admin')
+ws['K1'].comment = Comment(f'From Role and Team. {PRE}: no approval. {EMP}: team approver from the Approvers tab, or the default approver if the team is not listed. {CON} and {VEN}: their configured approvers. Same approvers for new and restore. Full rules on the Access Rules tab.', 'Admin')
 ws['I1'].comment = Comment('New users must send a certificate of completion for one of the required training recordings. Not required for restores.', 'Admin')
 ws['J1'].comment = Comment("Their answer to Template D. Leave blank until they reply.", 'Admin')
 
@@ -174,27 +165,28 @@ lines = [
     ('One row per request. Fill in the cream-colored cells (blue text); grey-header columns calculate themselves.', body),
     ('', body),
     ('Steps', bold),
-    ('1. Enter Ticket #, Received, Requester, Email, Role and Request type. Staff requests: also pick the Team.', body),
+    (f'1. Enter Ticket #, Received, Requester, Email, Role and Request type. {EMP} requests: also pick the Team.', body),
     ('2. Read Next action and do it. Approver, Last removed and Times removed fill in on their own.', body),
-    ('3. Record what happened: Training certificate received, Expects regular use, Approval, Sent to User Admin, Access confirmed.', body),
+    (f'3. Record what happened: Training certificate received, Expects regular use, Approval, Sent to {C.IDENTITY_ADMIN}, Access confirmed.', body),
     ('4. Next action updates after each entry. Entering an Access confirmed date marks the row Done.', body),
     ('', body),
     ('How Next action decides', bold),
-    ('New request: training first (Template F) > approval if not an attorney (Templates A + B) > User Admin adds > Template C.', body),
-    ('Restore request: Template D asks about regular use > approval if not an attorney > User Admin restores > Template E. No training needed.', body),
+    (f'New request: training first (Template F) > approval unless {PRE} (Templates A + B) > {C.IDENTITY_ADMIN} adds to {C.ACCESS_GROUP} > Template C.', body),
+    (f'Restore request: Template D asks about regular use > approval unless {PRE} > {C.IDENTITY_ADMIN} restores > Template E. No training needed.', body),
     ('A row with Approval = Approved skips the role check (use for pre-approved cases, e.g. a user removed in error).', body),
     ('', body),
     ('Status colours', bold),
-    ('Action needed = your move · Waiting = approver or User Admin · Done · Closed - no access.', body),
+    (f'Action needed = your move · Waiting = approver or {C.IDENTITY_ADMIN} · Done · Closed - no access.', body),
     ('', body),
     ('Tabs', bold),
+    ('Access Rules: who approves each role, and the steps for new and restore requests.', body),
     ('Tracker: the requests (row 2 is a sample; delete it).', body),
     ('Templates: email text A-F. Fill in the bracketed placeholders.', body),
-    ('Liaisons: team approvers. Teams not listed go to the default approver.', body),
+    ('Approvers: team approvers for employees. Teams not listed go to the default approver.', body),
     ('Console: paste a new removal list to check it before logging it (steps are on that tab).', body),
     ('Removal Log: every removal, one row per person per removal. Add each new list at the bottom; the Tracker and Console update on their own.', body),
     ('', body),
-    ('Generic template. Configure approvers, URLs and wording in the CONFIG block of build_tracker.py.', Font(name=F, size=9, italic=True, color='595959')),
+    ('Generic template. Configure roles, approvers, URLs and wording in access_config.py.', Font(name=F, size=9, italic=True, color='595959')),
 ]
 for i, (t, f) in enumerate(lines, 1):
     c = hw.cell(row=i, column=2, value=t)
@@ -208,22 +200,7 @@ for col, w in zip('ABCD', (10, 26, 18, 100)):
 for i, h in enumerate(('Template', 'Use', 'Status', 'Text'), 1):
     c = tw.cell(row=1, column=i, value=h)
     c.font = hdr_font; c.fill = hdr_fill; c.border = box
-LIT = TRAIN_URL_1
-TRN = TRAIN_URL_2
-LIB = GUIDE_LINE
-temps = [
-    ('A', 'To requester: approval needed', 'In use',
-     'Thanks for your interest in {APP}. Since {APP} licenses are limited and carry a significant cost, we need to seek approval for this request. I will get back to you once I hear back.'),
-    ('B', 'To approver', 'In use', '[Name] has requested {APP} access. Do you approve?'),
-    ('C', 'Access created (new)', 'In use',
-     'I have created {APP} access for you. Wait about 30 minutes and try logging in at ' + APP_URL + ' with your email address. It may take up to an hour for you to be able to access.\n' + LIB + '\nPlease note that accounts are automatically deprovisioned after set periods of inactivity.'),
-    ('D', 'Access was removed (restore)', 'In use',
-     "To make the best use of a limited number of {APP} licenses, the firm periodically reassigns seats that haven't been used recently. Our records showed no recent activity on your account, so your access was deactivated.\nDo you expect to use {APP} regularly for current or upcoming work? If so, please let me know and we'll look at restoring your access. If not, you're welcome to reach out whenever a need comes up."),
-    ('E', 'Access restored', 'In use',
-     'I have restored {APP} access for you. You should now be able to log in at {APP_URL} with your email address.\n' + LIB),
-    ('F', 'Training required (new)', 'In use',
-     f"Thanks for your interest in {APP}. Before we can set up your access, please complete one of the two required {APP} training recordings in {TRAINING_LOCATION}:\n- {TRAIN_NAME_1}: {LIT}\n- {TRAIN_NAME_2}: {TRN}\nOnce you've finished, reply to this email with your certificate of completion and we can get you set up."),
-]
+temps = [(k, use, 'In use', C.fill(txt)) for k, use, txt in C.TEMPLATES]
 for i, t in enumerate(temps, 2):
     for j, v in enumerate(t, 1):
         c = tw.cell(row=i, column=j, value=v)
@@ -231,21 +208,51 @@ for i, t in enumerate(temps, 2):
         c.alignment = wrap; c.border = box
 tw.freeze_panes = 'A2'
 
-# ---------------- Liaisons ----------------
-lw = wb.create_sheet('Liaisons')
-for col, w in zip('ABC', (58, 10, 32)):
+# ---------------- Approvers ----------------
+lw = wb.create_sheet('Approvers')
+for col, w in zip('ABC', (40, 10, 32)):
     lw.column_dimensions[col].width = w
-for i, h in enumerate(('Team', 'Code', 'AI liaison'), 1):
+for i, h in enumerate(('Team', 'Code', 'Team approver'), 1):
     c = lw.cell(row=1, column=i, value=h)
     c.font = hdr_font; c.fill = hdr_fill; c.border = box
-liaisons = [
-    ('Example Team', 'EXT', '[Liaison name]'),
-]
-for i, t in enumerate(liaisons, 2):
-    for j, v in enumerate(t, 1):
+for i, t_ in enumerate(C.TEAM_APPROVERS, 2):
+    for j, v in enumerate(t_, 1):
         c = lw.cell(row=i, column=j, value=v); c.font = body; c.border = box
-nr = len(liaisons) + 3
-lw.cell(row=nr, column=1, value='Add one row per team. Any team not listed goes to the default approver.').font = Font(name=F, size=9, italic=True, color='595959')
+nr = len(C.TEAM_APPROVERS) + 3
+lw.cell(row=nr, column=1, value=f'Add one row per team. {EMP} requests from a team not listed go to {C.APPROVER_DEFAULT}.').font = Font(name=F, size=9, italic=True, color='595959')
+
+# ---------------- Access Rules ----------------
+strip = lambda s: re.sub(r'<[^>]+>', '', C.fill(s))
+ar = wb.create_sheet('Access Rules', 1)
+for col, w in zip('ABC', (24, 34, 60)):
+    ar.column_dimensions[col].width = w
+ar['A1'] = '{APP} Access Rules'; ar['A1'].font = title_font
+ar['A2'] = f'Seats are granted only through membership in {C.ACCESS_GROUP}. {C.IDENTITY_ADMIN} makes every change.'
+ar['A2'].font = body
+row = 4
+ar.cell(row=row, column=1, value='Who approves').font = bold; row += 1
+for i, h in enumerate(('Role', 'Approver (new and restore)', 'Notes'), 1):
+    c = ar.cell(row=row, column=i, value=h); c.font = hdr_font; c.fill = hdr_fill; c.border = box
+row += 1
+for rule in C.APPROVAL_RULES:
+    for j, v in enumerate(rule, 1):
+        c = ar.cell(row=row, column=j, value=strip(v)); c.font = body; c.border = box; c.alignment = wrap
+    row += 1
+for heading, items in (('New access: steps', C.NEW_ACCESS_STEPS), ('Restore access: steps', C.RESTORE_STEPS)):
+    row += 1
+    ar.cell(row=row, column=1, value=heading).font = bold; row += 1
+    for n, s_ in enumerate(items, 1):
+        c = ar.cell(row=row, column=1, value=f'{n}. {strip(s_)}'); c.font = body
+        ar.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        c.alignment = wrap; ar.row_dimensions[row].height = 28; row += 1
+row += 1
+ar.cell(row=row, column=1, value='Access review').font = bold; row += 1
+for s_ in (f'{C.REVIEW_FREQUENCY}, run by {C.REVIEW_OWNER}: {C.INACTIVITY_RULE}',
+           'Removal messages do not state the inactivity period. New users are told in Template C that inactive accounts are removed.',
+           'Log every removal on the Removal Log tab. Check each new list on the Console tab before it goes through.'):
+    c = ar.cell(row=row, column=1, value=s_); c.font = body
+    ar.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+    c.alignment = wrap; ar.row_dimensions[row].height = 28; row += 1
 
 # ---------------- Removal Log ----------------
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -326,18 +333,14 @@ cw.conditional_formatting.add(rngc, FormulaRule(formula=['LEFT($G9,9)="Duplicate
 cw.conditional_formatting.add(rngc, FormulaRule(formula=['LEFT($G9,7)="Removed"'], fill=PatternFill('solid', fgColor='FFF2CC')))
 
 wb.active = wb.sheetnames.index('Tracker')
-# Fill {APP} / {APP_URL} placeholders everywhere text was written.
-def _fill(v):
-    return v.replace('{APP_URL}', APP_URL).replace('{APP}', APP) if isinstance(v, str) else v
+# Fill {TOKENS} everywhere text was written.
 for _ws in wb.worksheets:
     for _row in _ws.iter_rows():
         for _c in _row:
-            if isinstance(_c.value, str) and '{APP' in _c.value:
-                _c.value = _fill(_c.value)
-            if _c.comment and '{APP' in _c.comment.text:
-                _c.comment = Comment(_fill(_c.comment.text), _c.comment.author)
-    if '{APP' in _ws.title:
-        _ws.title = _fill(_ws.title)
+            if isinstance(_c.value, str) and '{' in _c.value:
+                _c.value = C.fill(_c.value)
+            if _c.comment and '{' in _c.comment.text:
+                _c.comment = Comment(C.fill(_c.comment.text), _c.comment.author)
 
 wb.save(OUT)
 print('saved', OUT)
