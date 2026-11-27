@@ -51,3 +51,7 @@ Each script starts with a `CONFIG` block. Set the app name (`APP`), its login UR
 
 - All names, emails and teams in the scripts are placeholders. The sample row is labeled for deletion.
 - No credentials, tenant IDs or real user data are stored or needed. The tools build blank templates. They don't connect to Entra ID.
+
+## License
+
+MIT. See `LICENSE`.
