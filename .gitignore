@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.env
+# Generated output (examples/ is committed on purpose)
+/*.xlsx
+/*.pdf
