@@ -61,7 +61,7 @@ Open the workbook in Excel so its formulas calculate (or recalculate it with Lib
 
 ## Configure for your organization
 
-Edit `scripts/access_config.py`. It holds the app name and URL, the access group, role names, approvers, team approvers, training links, review schedule, approval steps and email templates. Both scripts read from it, so the workbook and the quick reference always match. Set `TRAINING_REQUIRED_FOR_NEW = False` to drop the training gate.
+Edit `scripts/access_config.py`. It holds the app name and URL, the access group, the sync delay wording, role names, approvers, team approvers, training links, review schedule, approval steps and email templates. Both scripts read from it, so the workbook and the quick reference always match. Set `TRAINING_REQUIRED_FOR_NEW = False` to drop the training gate.
 
 ## Notes
 

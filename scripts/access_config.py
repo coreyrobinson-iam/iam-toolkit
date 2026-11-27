@@ -12,6 +12,9 @@ Text can use {TOKENS}. fill() swaps each token for its value below.
 APP = 'ExampleApp'                      # the licensed SaaS app
 APP_URL = 'https://app.example.com/'    # where users sign in
 ACCESS_GROUP = 'ExampleApp-Users'       # Entra ID / AD group that grants a seat
+# How long a group change takes to reach the app, as it should read in emails.
+PROVISIONING_DELAY = 'Allow about 30 minutes for the change to sync, then sign in'
+PROVISIONING_MAX = 'If it still does not work after an hour, reply and let me know.'
 
 # ---------------- Teams and owners ----------------
 ORG = '[Organization]'
@@ -86,8 +89,8 @@ TEMPLATES = [
     ('B', 'To approver',
      '[Name] ([Role], [Team]) has requested {APP} access. Do you approve?'),
     ('C', 'Access granted (new)',
-     'Your {APP} access is set up. Allow about 30 minutes, then sign in at {APP_URL} with your work email. '
-     'It can take up to an hour to work.\n{GUIDE_LINE}\n'
+     'Your {APP} access is set up. {PROVISIONING_DELAY} at {APP_URL} with your work email. '
+     '{PROVISIONING_MAX}\n{GUIDE_LINE}\n'
      'Accounts are removed automatically after a period of inactivity.'),
     ('D', 'Access was removed (restore)',
      "To make the best use of a limited number of {APP} licenses, we regularly reassign seats that haven't been used. "
